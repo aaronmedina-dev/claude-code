@@ -72,6 +72,26 @@ If you're short on time, these are the highest-signal files:
 
 The system prompt in `prompts.ts` is probably the single most valuable thing in the entire leak -- it's what defines Claude Code's behavior, and it's not something you can extract from the npm package normally.
 
+## Detailed Documentation
+
+For in-depth analysis of each system, see the **[`docs/`](./docs/README.md)** directory:
+
+| # | Document | Description |
+|---|----------|-------------|
+| 1 | [System Prompt Assembly](./docs/01-system-prompt-assembly.md) | How the system prompt is dynamically constructed from 15+ sections |
+| 2 | [Tool Permissions & Sandboxing](./docs/02-tool-permissions-and-sandboxing.md) | Permission modes, macOS Seatbelt sandbox, bash security layers |
+| 3 | [Agent & Sub-Agent System](./docs/03-agent-sub-agent-system.md) | Agent spawning, built-in agents, lifecycle, swarm coordination |
+| 4 | [Context Compaction](./docs/04-context-compaction.md) | Auto-compact, microcompaction, token budgets, summarization |
+| 5 | [Memory System](./docs/05-memory-system.md) | Persistent memory types, MEMORY.md, auto-extraction, aging |
+| 6 | [Feature Flags & Hidden Commands](./docs/06-feature-flags-and-hidden-commands.md) | `bun:bundle` feature gates, GrowthBook A/B tests, hidden slash commands |
+| 7 | [Dream Task System](./docs/07-dream-task-system.md) | Background "dreaming" during idle periods |
+| 8 | [Permission Bypass Mode](./docs/08-permission-bypass-mode.md) | How bypass mode works and its safeguards |
+| 9 | [Custom Ink Fork](./docs/09-custom-ink-fork.md) | React reconciler for terminal, Yoga layout, event system |
+| 10 | [MCP Client Implementation](./docs/10-mcp-client-implementation.md) | Server discovery, connection lifecycle, tool proxying, OAuth |
+| 11 | [Tool Interface Pattern](./docs/11-tool-interface-pattern.md) | Tool anatomy, registration, prompt/UI pattern, skill system |
+| 12 | [Bridge System](./docs/12-bridge-system.md) | CLI-to-Desktop/Web communication, REPL bridge, JWT auth |
+| 13 | [Undocumented Hacks & Optimizations](./docs/13-undocumented-hacks-and-optimizations.md) | Env vars, hidden commands, cost reduction, CLAUDE.md tricks, agent hacks |
+
 ---
 
 ## Overview
