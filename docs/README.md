@@ -19,21 +19,16 @@ Detailed documentation of Claude Code's internal architecture, extracted from th
 | 6 | [Feature Flags & Hidden Commands](./06-feature-flags-and-hidden-commands.md) | `bun:bundle` feature gates, GrowthBook A/B tests, hidden slash commands |
 | 7 | [Dream Task System](./07-dream-task-system.md) | Background "dreaming" during idle periods |
 | 8 | [Permission Bypass Mode](./08-permission-bypass-mode.md) | How bypass mode works and its safeguards |
-
-## Undocumented Hacks & Optimizations
-
-| # | Document | Description |
-|---|----------|-------------|
-| 13 | [Undocumented Hacks & Optimizations](./13-undocumented-hacks-and-optimizations.md) | Env vars, hidden commands, cost reduction, CLAUDE.md tricks, agent hacks |
+| 9 | [Undocumented Hacks & Optimizations](./13-undocumented-hacks-and-optimizations.md) | Env vars, hidden commands, cost reduction, CLAUDE.md tricks, agent hacks |
 
 ## Architecture Deep Dives
 
 | # | Document | Description |
 |---|----------|-------------|
-| 9 | [Custom Ink Fork](./09-custom-ink-fork.md) | React reconciler for terminal, Yoga layout, event system |
-| 10 | [MCP Client Implementation](./10-mcp-client-implementation.md) | Server discovery, connection lifecycle, tool proxying, OAuth |
-| 11 | [Tool Interface Pattern](./11-tool-interface-pattern.md) | Tool anatomy, registration, prompt/UI pattern, skill system |
-| 12 | [Bridge System](./12-bridge-system.md) | CLI-to-Desktop/Web communication, REPL bridge, JWT auth |
+| 10 | [Custom Ink Fork](./09-custom-ink-fork.md) | React reconciler for terminal, Yoga layout, event system |
+| 11 | [MCP Client Implementation](./10-mcp-client-implementation.md) | Server discovery, connection lifecycle, tool proxying, OAuth |
+| 12 | [Tool Interface Pattern](./11-tool-interface-pattern.md) | Tool anatomy, registration, prompt/UI pattern, skill system |
+| 13 | [Bridge System](./12-bridge-system.md) | CLI-to-Desktop/Web communication, REPL bridge, JWT auth |
 
 ---
 

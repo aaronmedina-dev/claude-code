@@ -23,31 +23,32 @@ The source map file in the published npm package contained a reference to the fu
 ## What You Can Learn From It
 
 ### Understand how Claude Code actually works under the hood
-- How the system prompt is assembled (`src/constants/prompts.ts`) -- see exactly what instructions Claude gets
-- How tool permissions and sandboxing work -- the security model is fully visible
-- How the agent/sub-agent system spawns and manages child conversations
-- How context compaction works when conversations get long
-- How the memory system (MEMORY.md, memdir) reads/writes/ages memories
+- How the system prompt is assembled (`src/constants/prompts.ts`) -- see exactly what instructions Claude gets ([docs](./docs/01-system-prompt-assembly.md))
+- How tool permissions and sandboxing work -- the security model is fully visible ([docs](./docs/02-tool-permissions-and-sandboxing.md))
+- How the agent/sub-agent system spawns and manages child conversations ([docs](./docs/03-agent-sub-agent-system.md))
+- How context compaction works when conversations get long ([docs](./docs/04-context-compaction.md))
+- How the memory system (MEMORY.md, memdir) reads/writes/ages memories ([docs](./docs/05-memory-system.md))
 
 ### Reverse-engineer undocumented behavior
-- Feature flags reveal unreleased/internal features (KAIROS assistant mode, COORDINATOR_MODE, VOICE_MODE)
-- The full list of 90+ slash commands, including hidden/internal ones (`/bughunter`, `/good-claude`, `/stickers`, `/thinkback`, `/teleport`)
-- How permission bypass mode actually works
-- What the "dream" task system does (background processing while idle)
-- GrowthBook feature flag names reveal A/B tests Anthropic is running
+- Feature flags reveal unreleased/internal features (KAIROS assistant mode, COORDINATOR_MODE, VOICE_MODE) ([docs](./docs/06-feature-flags-and-hidden-commands.md))
+- The full list of 90+ slash commands, including hidden/internal ones (`/bughunter`, `/good-claude`, `/stickers`, `/thinkback`, `/teleport`) ([docs](./docs/06-feature-flags-and-hidden-commands.md))
+- How permission bypass mode actually works ([docs](./docs/08-permission-bypass-mode.md))
+- What the "dream" task system does (background processing while idle) ([docs](./docs/07-dream-task-system.md))
+- GrowthBook feature flag names reveal A/B tests Anthropic is running ([docs](./docs/06-feature-flags-and-hidden-commands.md))
 
 ### Study the architecture for your own projects
-- The custom Ink fork is a complete React-to-terminal renderer -- useful reference for building terminal UIs
-- The MCP client implementation shows how to properly integrate MCP servers
-- The tool interface pattern (schema + permission + execution + UI) is a clean extensible design
-- The bridge system shows how to connect a CLI to desktop/web frontends
+- The custom Ink fork is a complete React-to-terminal renderer -- useful reference for building terminal UIs ([docs](./docs/09-custom-ink-fork.md))
+- The MCP client implementation shows how to properly integrate MCP servers ([docs](./docs/10-mcp-client-implementation.md))
+- The tool interface pattern (schema + permission + execution + UI) is a clean extensible design ([docs](./docs/11-tool-interface-pattern.md))
+- The bridge system shows how to connect a CLI to desktop/web frontends ([docs](./docs/12-bridge-system.md))
 
 ## What You Can Actually Build
 
-- **Custom tools/skills** -- now that you know the exact interface, you can write tools that match the internal format
-- **MCP servers optimized for Claude Code** -- you can see exactly how it discovers, connects to, and calls MCP tools
-- **Better CLAUDE.md files** -- reading `prompts.ts` shows exactly how CLAUDE.md content gets injected and what the model sees
-- **Prompt engineering** -- the full system prompt construction reveals what instructions work and how Anthropic structures them
+- **Custom tools/skills** -- now that you know the exact interface, you can write tools that match the internal format ([docs](./docs/11-tool-interface-pattern.md))
+- **MCP servers optimized for Claude Code** -- you can see exactly how it discovers, connects to, and calls MCP tools ([docs](./docs/10-mcp-client-implementation.md))
+- **Better CLAUDE.md files** -- reading `prompts.ts` shows exactly how CLAUDE.md content gets injected and what the model sees ([docs](./docs/01-system-prompt-assembly.md))
+- **Prompt engineering** -- the full system prompt construction reveals what instructions work and how Anthropic structures them ([docs](./docs/01-system-prompt-assembly.md))
+- **Undocumented hacks** -- env vars, hidden commands, cost reduction tricks, and agent optimizations ([docs](./docs/13-undocumented-hacks-and-optimizations.md))
 
 ## What You Can't Do
 
@@ -86,11 +87,11 @@ For in-depth analysis of each system, see the **[`docs/`](./docs/README.md)** di
 | 6 | [Feature Flags & Hidden Commands](./docs/06-feature-flags-and-hidden-commands.md) | `bun:bundle` feature gates, GrowthBook A/B tests, hidden slash commands |
 | 7 | [Dream Task System](./docs/07-dream-task-system.md) | Background "dreaming" during idle periods |
 | 8 | [Permission Bypass Mode](./docs/08-permission-bypass-mode.md) | How bypass mode works and its safeguards |
-| 9 | [Custom Ink Fork](./docs/09-custom-ink-fork.md) | React reconciler for terminal, Yoga layout, event system |
-| 10 | [MCP Client Implementation](./docs/10-mcp-client-implementation.md) | Server discovery, connection lifecycle, tool proxying, OAuth |
-| 11 | [Tool Interface Pattern](./docs/11-tool-interface-pattern.md) | Tool anatomy, registration, prompt/UI pattern, skill system |
-| 12 | [Bridge System](./docs/12-bridge-system.md) | CLI-to-Desktop/Web communication, REPL bridge, JWT auth |
-| 13 | [Undocumented Hacks & Optimizations](./docs/13-undocumented-hacks-and-optimizations.md) | Env vars, hidden commands, cost reduction, CLAUDE.md tricks, agent hacks |
+| 9 | [Undocumented Hacks & Optimizations](./docs/13-undocumented-hacks-and-optimizations.md) | Env vars, hidden commands, cost reduction, CLAUDE.md tricks, agent hacks |
+| 10 | [Custom Ink Fork](./docs/09-custom-ink-fork.md) | React reconciler for terminal, Yoga layout, event system |
+| 11 | [MCP Client Implementation](./docs/10-mcp-client-implementation.md) | Server discovery, connection lifecycle, tool proxying, OAuth |
+| 12 | [Tool Interface Pattern](./docs/11-tool-interface-pattern.md) | Tool anatomy, registration, prompt/UI pattern, skill system |
+| 13 | [Bridge System](./docs/12-bridge-system.md) | CLI-to-Desktop/Web communication, REPL bridge, JWT auth |
 
 ---
 
