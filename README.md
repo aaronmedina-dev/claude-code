@@ -20,6 +20,60 @@ The source map file in the published npm package contained a reference to the fu
 
 ---
 
+## What You Can Learn From It
+
+### Understand how Claude Code actually works under the hood
+- How the system prompt is assembled (`src/constants/prompts.ts`) -- see exactly what instructions Claude gets
+- How tool permissions and sandboxing work -- the security model is fully visible
+- How the agent/sub-agent system spawns and manages child conversations
+- How context compaction works when conversations get long
+- How the memory system (MEMORY.md, memdir) reads/writes/ages memories
+
+### Reverse-engineer undocumented behavior
+- Feature flags reveal unreleased/internal features (KAIROS assistant mode, COORDINATOR_MODE, VOICE_MODE)
+- The full list of 90+ slash commands, including hidden/internal ones (`/bughunter`, `/good-claude`, `/stickers`, `/thinkback`, `/teleport`)
+- How permission bypass mode actually works
+- What the "dream" task system does (background processing while idle)
+- GrowthBook feature flag names reveal A/B tests Anthropic is running
+
+### Study the architecture for your own projects
+- The custom Ink fork is a complete React-to-terminal renderer -- useful reference for building terminal UIs
+- The MCP client implementation shows how to properly integrate MCP servers
+- The tool interface pattern (schema + permission + execution + UI) is a clean extensible design
+- The bridge system shows how to connect a CLI to desktop/web frontends
+
+## What You Can Actually Build
+
+- **Custom tools/skills** -- now that you know the exact interface, you can write tools that match the internal format
+- **MCP servers optimized for Claude Code** -- you can see exactly how it discovers, connects to, and calls MCP tools
+- **Better CLAUDE.md files** -- reading `prompts.ts` shows exactly how CLAUDE.md content gets injected and what the model sees
+- **Prompt engineering** -- the full system prompt construction reveals what instructions work and how Anthropic structures them
+
+## What You Can't Do
+
+- **Build and run it** -- no `package.json`, `tsconfig.json`, or build config. It uses `bun:bundle` feature flags and `MACRO.VERSION` build-time injection that require Anthropic's build pipeline.
+- **Fork and redistribute** -- it's Anthropic's proprietary code.
+- **Use it against their API differently** -- the API client is standard `@anthropic-ai/sdk`, nothing secret there.
+
+## The Most Valuable Parts to Read
+
+If you're short on time, these are the highest-signal files:
+
+| File | Why |
+|---|---|
+| `src/constants/prompts.ts` | The full system prompt -- this is what makes Claude Code work the way it does |
+| `src/tools/BashTool/` | The most complex tool, shows the full security/sandbox model |
+| `src/tools/AgentTool/built-in/` | How built-in agents (Explore, Plan, etc.) are defined and constrained |
+| `src/constants/cyberRiskInstruction.ts` | Security guardrails baked into the prompt |
+| `src/utils/permissions/` | The complete permission model |
+| `src/services/mcp/` | How MCP integration really works |
+| `src/memdir/` | The memory system internals |
+| `src/skills/bundled/` | How skills like `/commit` and `/review-pr` are defined |
+
+The system prompt in `prompts.ts` is probably the single most valuable thing in the entire leak -- it's what defines Claude Code's behavior, and it's not something you can extract from the npm package normally.
+
+---
+
 ## Overview
 
 Claude Code is Anthropic's official CLI-based AI coding assistant. It provides an interactive terminal-based REPL where users can converse with Claude to perform software engineering tasks -- editing files, running commands, searching codebases, managing git workflows, and more. The application is built as a React-based terminal UI using a custom fork of Ink (a React renderer for CLI apps), powered by the Bun runtime.
