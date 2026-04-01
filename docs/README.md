@@ -21,6 +21,12 @@ Detailed documentation of Claude Code's internal architecture, extracted from th
 | 8 | [Permission Bypass Mode](./08-permission-bypass-mode.md) | How bypass mode works and its safeguards |
 | 9 | [Undocumented Hacks & Optimizations](./13-undocumented-hacks-and-optimizations.md) | Env vars, hidden commands, cost reduction, CLAUDE.md tricks, agent hacks |
 
+## Security Analysis
+
+| # | Document | Description |
+|---|----------|-------------|
+| 14 | [Security Vulnerabilities & Attack Surface](./14-security-vulnerabilities-and-attack-surface.md) | Prompt injection, shell bypasses, MCP attacks, SSRF, privilege escalation |
+
 ## Architecture Deep Dives
 
 | # | Document | Description |

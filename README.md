@@ -92,6 +92,7 @@ For in-depth analysis of each system, see the **[`docs/`](./docs/README.md)** di
 | 11 | [MCP Client Implementation](./docs/10-mcp-client-implementation.md) | Server discovery, connection lifecycle, tool proxying, OAuth |
 | 12 | [Tool Interface Pattern](./docs/11-tool-interface-pattern.md) | Tool anatomy, registration, prompt/UI pattern, skill system |
 | 13 | [Bridge System](./docs/12-bridge-system.md) | CLI-to-Desktop/Web communication, REPL bridge, JWT auth |
+| 14 | [Security Vulnerabilities & Attack Surface](./docs/14-security-vulnerabilities-and-attack-surface.md) | Prompt injection, shell bypasses, MCP attacks, SSRF, privilege escalation |
 
 ---
 
